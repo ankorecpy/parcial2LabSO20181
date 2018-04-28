@@ -1,3 +1,8 @@
+/**
+ * @author Sandra Lorena Pisamina <psandra@unicauca.edu.co> Oscar Ordoñez <oscarordonez@unicauca.edu.co>
+ * @brief Gestiona el envio y almacenamiento de ficheros.
+ *  */
+
 #include <netdb.h>
 #include <signal.h>
 #include <stdio.h>
@@ -30,6 +35,7 @@ void receive_file(int sockfd, transaccion cabecera);
 
 char * unirCadenas(char * cadena1, char * cadena2);
 void ejecutarComando(char * comando);
+void getNombreArchivo(char * rtArchivo);
 
 int configured;
 char configuracionPath[TAM_CONFIG_PATH];
@@ -45,8 +51,6 @@ int main(int argc, char * argv[]) {
   int s;
   int c;
   char * rutaConfig = "config.txt";
-
-  //TODO Validar el archivo de configuracion
 
   //Configurar el manejador de señal SIGTERM
   memset(&act, 0, sizeof(struct sigaction));
@@ -117,10 +121,12 @@ void handle_sigterm(int sig) {
   finished = 1;
 }
 
+/**
+ * @brief Gestiona la petición recibida por parte del cliente
+ * @param sockfd descriptor del socket aceptado por el cual se realiza la comunicación con el cliente
+ * */
 void handle_client(int sockfd) {
   printf("Handle client\n");
-  //Si la operacion es "put": receive_file(sockfd);
-  //Si la operacion es "get": send_file(sockfd);
   
   transaccion cabecera;
   if (read(sockfd, &cabecera, sizeof(transaccion)) != sizeof(transaccion)) {
@@ -131,7 +137,7 @@ void handle_client(int sockfd) {
 
   switch (cabecera.tipo) {
 	  case 1:
-    printf("\nRecibiendo: %s de tamanio %d en %s", cabecera.nombreArchivo, cabecera.tamanio, cabecera.ruta);
+    printf("\nRecibiendo: %s de tamanio %d bytes en el directorio %s", cabecera.nombreArchivo, cabecera.tamanio, cabecera.ruta);
 		receive_file(sockfd, cabecera);
 	  break;
 	  case 2:
@@ -139,17 +145,55 @@ void handle_client(int sockfd) {
 	  break;
 	  default:
 	  break;
-  }
-  
+  }  
   fflush(stdout);
   close(sockfd);
   exit(EXIT_SUCCESS);
 }
 
-void send_file(int sockfd, transaccion cabecera) {
-	
+/**
+ * @brief Se encarga del envio de informacion acerca del archivo que se enviara al cliente, la información se envia por medio de una cabecera struct transaccion, posteriormente se envia el archivo al cliente
+ * @param sockfd descriptor del socket aceptado por el cual se realiza la comunicación con el cliente
+ * @param cabeceraSolicitud cabecera de peticion de envio de archivo, contiene la referencia de la ruta donde se encuentra el archivo en el servidor
+ * */
+void send_file(int sockfd, transaccion cabeceraSolicitud) {
+	struct stat st;
+  int fdEscritura, bytesLeidos, archivoEncontrado = 0, fdArchivo;
+	char buffer[BUFFER_SIZE];
+  char * ruta = unirCadenas(configuracionPath, cabeceraSolicitud.ruta);
+  transaccion cabeceraEnvio;
+  printf("\nSolicitud de envio de archivo: %s\n", ruta);
+  if (stat(ruta, &st) != 0) {
+    fprintf(stderr, "el archivo buscado no existe\n");
+    cabeceraEnvio.tipo = 0;
+    write(sockfd, &cabeceraEnvio, sizeof(transaccion));
+  } else {
+    archivoEncontrado = 1;
+    cabeceraEnvio.tipo = 1;
+    cabeceraEnvio.tamanio = st.st_size;
+    char nombreArchivo[strlen(cabeceraSolicitud.nombreArchivo) + 1];
+    strcpy(nombreArchivo, cabeceraSolicitud.ruta);
+    getNombreArchivo(nombreArchivo);  
+    strcpy(cabeceraEnvio.nombreArchivo, nombreArchivo);
+    write(sockfd, &cabeceraEnvio, sizeof(transaccion));    
+    fdArchivo = open(ruta, O_RDONLY);
+    if (fdArchivo == -1) {
+      perror("open");
+      exit(EXIT_FAILURE);
+    }
+    do {
+      bytesLeidos = read(fdArchivo, buffer, BUFFER_SIZE);
+      if (bytesLeidos > 0) {
+        write(sockfd, buffer, bytesLeidos);
+      }
+    } while (bytesLeidos > 0);
+  }
 }
-
+/**
+ * @brief Se encarga de recibir informacion acerca del archivo que enviara el cliente, la información se recibe por medio de una cabecera struct transaccion, posteriormente se recibe el arhivo
+ * @param sockfd descriptor del socket aceptado por el cual se realiza la comunicación con el cliente
+ * @param cabeceraSolicitud cabecera de peticion de recepción de archivo, contiene la referencia de la ruta donde se desea almacenar el archivo en el servidor, el tamaño y su nombre.
+ * */
 void receive_file(int sockfd, transaccion cabecera) {
   struct stat st;
   int fdEscritura, bytesLeidos;
@@ -161,10 +205,9 @@ void receive_file(int sockfd, transaccion cabecera) {
     ruta = unirCadenas(ruta, "/");
   }
   ruta = unirCadenas(ruta, cabecera.nombreArchivo);
-  if (!stat(ruta, &st)) {
-    printf("el archivo recibido ya existe\n");
-    fflush(stdout);
-    exit(EXIT_SUCCESS);
+  if (stat(ruta, &st) == 0) {
+    fprintf(stderr, "el archivo recibido ya existe, no se sobreescribira\n");
+    exit(EXIT_FAILURE);
   } else {
     ejecutarComando(auxComandoCreacion);
   }  
@@ -180,7 +223,12 @@ void receive_file(int sockfd, transaccion cabecera) {
   } while (finished != 1);
   close(fdEscritura);  
 }
-
+/**
+ * @brief Se encarga de concatenar una cadena de caracteres seguida de otra.
+ * @param cadena1 cadena que sera la primera en la cadena resultante.
+ * @param cadena2 cadena que se añade al final de la cadena1.
+ * @return la cadena resultante de concatenar cadena1 con cadena2.
+ * */
 char * unirCadenas(char * cadena1, char * cadena2) {
   int longitud = strlen(cadena1) + strlen(cadena2) + 1;
   char * resultado = (char * ) malloc (sizeof(char) * longitud);
@@ -189,8 +237,25 @@ char * unirCadenas(char * cadena1, char * cadena2) {
   strcat(resultado, cadena2);
   return resultado;
 }
-
+/**
+ * @brief ejecuta un comando shell
+ * @param comando comando shell que se ejecuta.
+ * */
 void ejecutarComando(char * comando) {
   FILE * elemento = popen(comando, "w");
   pclose(elemento);
+}
+/**
+ * @brief Obtiene la última cadena depues de la última ocurrencia del caracter '/'.
+ * @param rtArchivo cadena de la que se extrae el nombre del archivo.
+ * */
+void getNombreArchivo(char * rtArchivo) {
+	char * sbcadena;	
+	int idc;
+	sbcadena = strrchr(rtArchivo, '/');
+	if (sbcadena != NULL) {
+		idc = sbcadena - rtArchivo + 1;
+		sbcadena = strchr(sbcadena, rtArchivo[idc]);
+		strcpy(rtArchivo, sbcadena);
+	}
 }

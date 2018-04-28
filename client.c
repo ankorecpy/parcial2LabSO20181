@@ -1,3 +1,8 @@
+/**
+ * @author Sandra Lorena Pisamina <psandra@unicauca.edu.co> Oscar Ordoñez <oscarordonez@unicauca.edu.co>
+ * @brief Gestiona el envio y almacenamiento de ficheros.
+ *  */
+
 #include <netdb.h>
 #include <signal.h>
 #include <stdio.h>
@@ -14,6 +19,7 @@
 
 void put_file(int sockfd, char * path, char * server_path);
 void get_file(int sockfd, char * server_path);
+void getNombreArchivo(char * rtArchivo);
 
 struct cabecera_transaccion {
 	int tipo;
@@ -56,16 +62,7 @@ int main(int argc, char * argv[]) {
   if (connect(s, info->ai_addr, info->ai_addrlen) != 0) {
     perror("bind");
     exit(EXIT_FAILURE);
-  }	
-  //armar el encabezado y enviar al servidor write(s, ...)
-
-  //si argv[1] es "put"
-    //path = argv[3]
-    //server_path = argv[4] o vacío
-    // put_file(s, path, server_path);
-  //si argv[1] es "get"
-    //server_path = argv[3]
-    // get_file(s, server_path);
+  }
     int accionEncontrada = 0;
     if (strcmp(argv[1], "put") == 0) {
       if (argc > 4) {
@@ -76,6 +73,7 @@ int main(int argc, char * argv[]) {
       accionEncontrada = 1;
     }
     if (strcmp(argv[1], "get") == 0) {
+      get_file(s, argv[3]);
       accionEncontrada = 1;
     }
     if (!accionEncontrada) {
@@ -87,13 +85,19 @@ int main(int argc, char * argv[]) {
    exit(EXIT_SUCCESS);
 }
 
-void put_file(int sockfd, char * path, char * server_path) {
+/**
+ * @brief envia un archivo al servidor
+ * @param sockfd descriptor del socket aceptado por el cual se realiza la comunicación con el servidor.
+ * @param path ruta local del archivo que se envia al servidor.
+ * @param server_path ruta en el servidor donde se alojará el archivo que se envia.
+ * */
+void put_file(int sockfd, char * path, char * server_path) {  
 	struct stat st;
-  char buffer[BUFFER_SIZE];
+  char buffer[BUFFER_SIZE], auxPath[strlen(path)];
 	transaccion cabecera;
   int bytesLeidos, fdArchivo;
-  printf("\npath: %s", path);
-  fflush(stdout);
+  strcpy(auxPath, path);
+  getNombreArchivo(auxPath);
   if (stat(path, &st) != 0) {
     perror("stat");
     exit(EXIT_FAILURE);    
@@ -101,7 +105,7 @@ void put_file(int sockfd, char * path, char * server_path) {
 	cabecera.tipo = 1;
 	cabecera.tamanio = st.st_size;
 	strcpy(cabecera.ruta, server_path);
-  strcpy(cabecera.nombreArchivo, path);	
+  strcpy(cabecera.nombreArchivo, auxPath);	
 	write(sockfd, &cabecera, sizeof(transaccion));
   fdArchivo = open(path, O_RDONLY);
   if (fdArchivo == -1) {
@@ -116,6 +120,55 @@ void put_file(int sockfd, char * path, char * server_path) {
   } while (bytesLeidos > 0);
 
 }
+/**
+ * @brief Se encarga de recibir un archivo del servidor
+ * @param sockfd descriptor del socket aceptado por el cual se realiza la comunicación con el servidor.
+ * @param ruta en el servidor donde se aloja el archivo a pedir.
+ * */
 void get_file(int sockfd, char * server_path) {
-	
+  int fdEscritura, bytesLeidos = 0, finished = 0, acumBytesLeidos = 0;
+  struct stat st;
+  char buffer[BUFFER_SIZE];
+  transaccion cabeceraSolicitud;
+  cabeceraSolicitud.tipo = 2;
+	strcpy(cabeceraSolicitud.ruta, server_path);
+  write(sockfd, &cabeceraSolicitud, sizeof(transaccion));
+  transaccion cabeceraRespuesta;
+  read(sockfd, &cabeceraRespuesta, sizeof(transaccion));
+  if (cabeceraRespuesta.tipo == 0) {
+    fprintf(stderr, "\nEl archivo no se encuentra alojado en el servidor, verifique la ruta");
+    exit(EXIT_FAILURE);
+  }
+  if (stat(cabeceraRespuesta.nombreArchivo, &st) == 0) {
+    fprintf(stderr, "\nEl archivo a recibir ya se encuentra almacenado en este directorio");
+    exit(EXIT_FAILURE);
+  }
+  printf("\nRecibiendo %s con tamanio %d\n", cabeceraRespuesta.nombreArchivo, cabeceraRespuesta.tamanio);
+  fdEscritura = open(cabeceraRespuesta.nombreArchivo, O_CREAT | O_WRONLY, 00660);
+  do {
+    memset(&buffer, 0, BUFFER_SIZE);
+    bytesLeidos = read(sockfd, buffer, BUFFER_SIZE);
+    acumBytesLeidos = acumBytesLeidos + bytesLeidos; 
+    if (bytesLeidos <= 0) {
+      finished = 1;
+    } else {
+      write(fdEscritura, &buffer, bytesLeidos);
+    }
+  } while (finished != 1 && acumBytesLeidos != cabeceraRespuesta.tamanio);
+  close(fdEscritura);
+  fflush(stdout);
+}
+/**
+ * @brief Obtiene la última cadena depues de la última ocurrencia del caracter '/'.
+ * @param rtArchivo cadena de la que se extrae el nombre del archivo.
+ * */
+void getNombreArchivo(char * rtArchivo) {
+	char * sbcadena;	
+	int idc;
+	sbcadena = strrchr(rtArchivo, '/');
+	if (sbcadena != NULL) {
+		idc = sbcadena - rtArchivo + 1;
+		sbcadena = strchr(sbcadena, rtArchivo[idc]);
+		strcpy(rtArchivo, sbcadena);
+	}
 }
